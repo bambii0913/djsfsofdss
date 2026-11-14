@@ -1325,3 +1325,12 @@ dialog.night select {
 @media(max-width:500px) {
   .character-grid { grid-template-columns:repeat(4,minmax(0,1fr)); }
 }
+
+/* Keep each reward and its unit together on narrow screens. */
+.result-score .reward-total { display: inline-block; white-space: nowrap; font-size: clamp(28px, 8vw, 49px); }
+
+/* Reward labels never split number and unit across lines. */
+.reward-summary { margin:22px 0; padding:22px; text-align:center; background:#eee5f6; color:#795590; border-radius:17px; }
+.reward-summary .reward-caption { margin:8px 0 4px; font-size:14px; font-weight:600; }
+.reward-summary .reward-value { margin:0 0 14px; font-size:clamp(28px,8vw,46px); font-weight:800; line-height:1.2; white-space:nowrap; word-break:keep-all; overflow-wrap:normal; }
+.reward-summary .reward-note { margin:6px 0; font-size:13px; line-height:1.5; }
