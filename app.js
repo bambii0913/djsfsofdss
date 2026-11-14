@@ -1,7 +1,7 @@
-import { localRequest } from "./local.js";
-import { API_BASE } from "./config.js";
-import { CHARACTERS, SEATS, calculate } from "./rules.js";
-import { connectSensor, disconnectSensor } from "./sensor.js";
+import { localRequest } from "./local.js?v=rewards-gps-5";
+import { API_BASE } from "./config.js?v=rewards-gps-5";
+import { CHARACTERS, SEATS, calculate } from "./rules.js?v=rewards-gps-5";
+import { connectSensor, disconnectSensor } from "./sensor.js?v=rewards-gps-5";
 let sensorStatus="센서 연결 안 됨";
 const AUTH_TOKEN_KEY="routine-mate-auth";
 const requestHeaders=()=>({
@@ -135,6 +135,10 @@ let geoPendingKm = 0;
 let geoFlushTimer = null;
 let geoSampleCount = 0;
 let geoLastReceived = 0;
+let geoSessionId = null;
+let geoTotalKm = 0;
+let geoSavePromise = null;
+let geoGeneration = 0;
 let viewScale = 1;
 let viewOffsetX = 0;
 let viewOffsetY = 0;
@@ -356,7 +360,7 @@ function refreshHUD() {
   const sleepScore=$("#sleep-breakdown");
   if(sleepScore && activeSession()?.mode==="sleep") {
     const estimate=calculate(activeSession(),Date.now()+clockOffset);
-    sleepScore.textContent="지금 종료하면 "+estimate.parts[0].value+" + "+estimate.parts[1].value+" = "+estimate.points+"점";
+    sleepScore.textContent="지금 종료하면 "+estimate.parts[0].value+" + "+estimate.parts[1].value+" = "+estimate.points+"점 · 예상 "+estimate.coins+"코인"+(activeSession().demo?" (데모는 실제 지급 0)":"");
   }
   const stand=$("#stand-button");
   if(stand)stand.hidden=game.seat==null;
@@ -409,9 +413,9 @@ function refreshHUD() {
     : `▶ ${MODE_NAMES[game.mode]} 시작하기`;
 
   $("#reward-hint").textContent = {
-    sleep: "🪙 포근한 밤을 준비하고 루틴 보상 받기",
+    sleep: "🌙 수면 10점당 1코인 · 최대 8코인",
     focus: "🪙 집중 1시간마다 10코인",
-    move: "🪙 1km마다 10코인 · 임시 규칙"
+    move: "🪙 1km당 10코인 · 100m당 1코인"
   }[game.mode];
 
   $("#world").classList.toggle(
@@ -439,7 +443,7 @@ function refreshHUD() {
 
     const distance = $("#session-distance");
     if (distance && session) {
-      distance.textContent = `${Math.round((session.km + geoPendingKm) * 1000)}m (${session.km.toFixed(2)}km 저장됨)`;
+      distance.textContent = `${Math.round(Math.max(session.km, geoSessionId === session.id ? geoTotalKm : 0) * 1000)}m (${session.km.toFixed(2)}km 저장됨)`;
     }
 
     const progress = $("#session-progress");
@@ -761,16 +765,16 @@ function openSettings() {
 
       <div class="divider"></div>
 
-      <h3>공통 점수 규칙</h3>
+      <h3>수면 점수 · 디톡스와 활동 코인</h3>
 
       <p class="small">
         수면 시간: 최대 50점, 목표보다 30분 부족마다 5점 감점.<br>
         시작 시각: 최대 30점, 목표와 30분 차이부터
         30분마다 2점 감점.<br>
         목표와 16~29분 차이는 임시로 감점하지 않습니다.<br>
-        디톡스: 완료한 온전한 1시간당 10점.<br>
-        활동: 1km당 10점, 소수점 점수는 버립니다.<br>
-        실제 미션은 1점 = 1코인. 집중·활동 보상은 각각 세션당 최대 40코인입니다. 데모 시간·거리로 진행한 세션은 보상과 공동 목표에 반영되지 않습니다.
+        디톡스: 완료한 온전한 1시간당 10코인. 점수는 계산하지 않습니다.<br>
+        활동: 1km당 10코인. 100m당 1코인이며 코인 소수점은 버립니다.<br>
+        수면은 10점당 1코인입니다. 80점은 8코인이며 10점 미만은 버립니다. 디톡스·활동은 코인을 직접 지급하며 40코인 상한은 없습니다. 데모 시간·거리로 진행한 세션은 보상과 공동 목표에 반영되지 않습니다.
       </p>
 
       <div class="notice">
@@ -927,7 +931,7 @@ function openRecords() {
                 <p>
                   ${timeString(elapsed(session))}
                   ${session.mode === "move"
-                    ? ` · ${Math.round((session.km + geoPendingKm) * 1000)}m (${session.km.toFixed(2)}km 저장됨)`
+                    ? ` · ${Math.round(Math.max(session.km, geoSessionId === session.id ? geoTotalKm : 0) * 1000)}m (${session.km.toFixed(2)}km 저장됨)`
                     : ""}
                 </p>
               </div>
@@ -937,7 +941,7 @@ function openRecords() {
                 data-action="record"
                 data-id="${session.id}"
               >
-                +${session.points || 0}점 ›
+                ${session.status === "running" ? "진행 중" : session.mode === "sleep" ? `${session.points || 0}점` : `+${session.coins || 0} 코인`} ›
               </button>
             </div>
           `).join("")
@@ -1022,7 +1026,7 @@ function openMissionSetup() {
           </label>
 
           <div class="notice">
-            완료된 온전한 1시간마다 10점을 지급합니다. 세션당 최대 40코인이에요.
+            완료한 온전한 1시간마다 10코인을 직접 지급합니다. 1시간 미만은 제외하며 점수는 계산하지 않아요.
             탭 전환·화면 잠금·중도 포기 시 타이머가 초기화되고 이번 보상은 지급되지 않습니다. 연결이 20초 이상 끊겨도 종료됩니다.
           </div>
         ` : `
@@ -1048,7 +1052,7 @@ function openMissionSetup() {
           </label>
 
           <div class="notice">
-            위치 권한을 허용하면 이동 거리를 측정합니다.
+            위치 권한을 허용하면 이동 거리를 측정합니다. 1km당 10코인으로, 0.5km는 5코인·1.5km는 15코인입니다.
             브라우저의 백그라운드 위치 측정은 중단될 수 있어요.
           </div>
         `}
@@ -1097,7 +1101,7 @@ function openRunningMission() {
           실제 수면의 질이나 깨어남은 판정하지 않습니다.
         </div>
         <div class="notice">
-          <strong>수면 루틴 보상 · 최대 80점</strong>
+          <strong>수면 루틴 · 최대 80점 / 8코인</strong>
           <p id="sleep-breakdown"></p>
           <p>시간 목표 최대 50점 + 취침 시각 규칙성 최대 30점</p>
           <p>목표 취침 ${escapeHTML(session.plannedBedtime || "기록 없음")} · 시작 시각 차이 ${Math.abs(session.bedtimeDifference ?? 720)}분</p>
@@ -1114,7 +1118,7 @@ function openRunningMission() {
       ${session.mode === "move" ? `
         <div class="row spread" style="margin-top:20px">
           <strong id="session-distance">
-            ${Math.round((session.km + geoPendingKm) * 1000)}m (${session.km.toFixed(2)}km 저장됨)
+            ${Math.round(Math.max(session.km, geoSessionId === session.id ? geoTotalKm : 0) * 1000)}m (${session.km.toFixed(2)}km 저장됨)
           </strong>
           <span class="small">
             목표 ${session.targetKm}km
@@ -1196,6 +1200,23 @@ function openRunningMission() {
   refreshHUD();
 }
 
+function rewardSummaryHTML(session) {
+  const value = (n) => Math.max(0, Math.floor(Number(n) || 0));
+  const isSleep = session.mode === "sleep";
+  const coins = value(session.coins);
+  const points = value(session.points);
+  return `
+    <section class="reward-summary" aria-label="미션 보상">
+      ${isSleep ? `<p class="reward-caption">수면 점수</p><p class="reward-value">${points}점</p>` : ""}
+      <p class="reward-caption">획득 코인</p>
+      <p class="reward-value">${coins}코인</p>
+      ${isSleep ? '<p class="reward-note">수면 10점당 1코인 · 10점 미만 버림</p>' : ""}
+      ${session.demo ? '<p class="reward-note">데모 기록 · 실제 코인 지급 없음</p>' : ""}
+      ${session.status === "abandoned" ? '<p class="reward-note">중도 종료 · 실제 코인 지급 없음</p>' : ""}
+      ${!session.demo && session.status === "completed" && session.rewardVersion !== 3 ? '<p class="reward-note">이전 규칙으로 정산된 기록입니다. 위 코인은 당시 지급액입니다.</p>' : ""}
+    </section>`;
+}
+
 function openResult(session) {
   if (!session) return;
 
@@ -1223,19 +1244,14 @@ function openResult(session) {
         <p>
           결과: ${timeString(session.elapsed || 0)}
           ${session.mode === "move"
-            ? ` · ${Math.round((session.km + geoPendingKm) * 1000)}m (${session.km.toFixed(2)}km 저장됨)`
+            ? ` · ${Math.round(session.km * 1000)}m (${session.km.toFixed(2)}km 저장됨)`
             : ""}
         </p>
       </div>
 
-      <div class="result-score">
-        +${session.points || 0}
-        <small>
-          점 · ${session.coins || 0} 코인
-        </small>
-      </div>
+      ${rewardSummaryHTML(session)}
 
-      ${(session.parts || []).map((part) => `
+      ${session.mode === "sleep" ? (session.parts || []).map((part) => `
         <div class="calculation">
           <strong>
             ${escapeHTML(part.label)}
@@ -1243,7 +1259,13 @@ function openResult(session) {
           </strong>
           <p>${escapeHTML(part.formula)}</p>
         </div>
-      `).join("")}
+      `).join("") : `
+        <div class="calculation">
+          <strong><span>${session.mode === "move" ? "활동 거리 보상" : "디톡스 시간 보상"}</span><span>${session.coins || 0} 코인</span></strong>
+          <p>${session.mode === "move" ? "1km당 10코인 · 100m당 1코인 · 코인 소수점 버림" : "완료한 온전한 1시간마다 10코인 · 1시간 미만 제외"}</p>
+          
+        </div>
+      `}
 
       <div class="notice">
         공동 목표 기여: ${session.contribution || 0}회<br>
@@ -1297,110 +1319,118 @@ function haversine(a, b) {
   );
 }
 
-function stopGPS() {
-  if (geoWatch !== null) {
-    navigator.geolocation.clearWatch(geoWatch);
-  }
+// Tracks observed coordinates only; imprecise samples yield approximate distance.
+function createDistanceTracker() {
+  let samples = [], anchor = null, lastAt = null;
+  const median = values => [...values].sort((a,b)=>a-b)[Math.floor(values.length/2)];
+  return position => {
+    const c=position.coords, at=position.timestamp;
+    if (![c.latitude,c.longitude,c.accuracy,at].every(Number.isFinite) ||
+        Math.abs(c.latitude)>90 || Math.abs(c.longitude)>180 || c.accuracy<0)
+      return {km:0,message:"유효한 위치 값 대기"};
+    if (lastAt !== null && at<=lastAt) return {km:0,message:"새 위치 값 대기"};
+    if (lastAt !== null && at-lastAt>60000) { samples=[]; anchor=null; }
+    lastAt=at;
+    if(c.accuracy>50) return {km:0,message:"위치 오차 50m 초과 · 거리 계산 보류"};
+    samples.push({latitude:c.latitude,longitude:c.longitude,accuracy:c.accuracy,at});
+    samples=samples.filter(p=>at-p.at<30000).slice(-3);
+    if(samples.length<3)return {km:0,message:"위치 안정화 중 ("+samples.length+"/3)"};
+    const point={latitude:median(samples.map(p=>p.latitude)),longitude:median(samples.map(p=>p.longitude)),
+      accuracy:median(samples.map(p=>p.accuracy)),at};
+    const approximate=point.accuracy>25;
+    if(!anchor){anchor=point;return {km:0,approximate,message:"시작 위치 확보 · 이동을 기다려요"};}
+    const seconds=(at-anchor.at)/1000;
+    const km=haversine(anchor,point);
+    if(seconds>120){anchor=point;return {km:0,approximate,message:"오랜 수신 간격 · 기준 위치 갱신"};}
+    if(seconds<=0)return {km:0,approximate,message:"새 위치 값 대기"};
+    if(km/seconds>.012){anchor=point;samples=[];return {km:0,approximate,message:"갑작스러운 위치 변화 제외"};}
+    const threshold=Math.max(8,.75*Math.max(anchor.accuracy,point.accuracy));
+    if(km*1000<threshold)return {km:0,approximate,message:
+      "이동 확인 "+Math.round(km*1000)+"m / 약 "+Math.ceil(threshold)+"m"};
+    anchor=point;
+    return {km,approximate,message:"이동 거리 반영"};
+  };
+}
 
-  geoWatch = null;
-  geoPrevious = null;
-  clearTimeout(geoFlushTimer);
-  geoFlushTimer = null;
+function stopGPS() {
+  geoGeneration++;
+  if(geoWatch!==null) navigator.geolocation.clearWatch(geoWatch);
+  geoWatch=null;
+  clearTimeout(geoFlushTimer);geoFlushTimer=null;
   updateGeoStatus("측정 중단");
 }
 
-function startGPS() {
-  const session = activeSession();
-
-  if (!session || session.mode !== "move") return;
-
-  if (!navigator.geolocation) {
-    updateGeoStatus("이 브라우저는 위치 측정을 지원하지 않아요.");
-    return;
+async function flushGPS() {
+  if(geoSavePromise) {
+    const success=await geoSavePromise;
+    if(!success)return false;
   }
-
-  stopGPS();
-  geoSampleCount = 0;
-  geoLastReceived = Date.now();
-  updateGeoStatus("위치 수신 대기 중… 위치 권한을 허용해 주세요.");
-
-  geoWatch = navigator.geolocation.watchPosition(
-    (position) => {
-      geoSampleCount++;
-      geoLastReceived = Date.now();
-      const accuracy = position.coords.accuracy;
-      const detail = `수신 ${geoSampleCount}회 · GPS 오차 약 ${Math.round(accuracy)}m`;
-      if (!Number.isFinite(accuracy) || accuracy > 25) {
-        geoPrevious = null;
-        updateGeoStatus(`거리 계산 보류 · ${detail}. 정확한 위치를 켜고 야외에서 기다려 주세요. 오차 25m 이하가 필요해요.`);
-        return;
-      }
-      if (!geoPrevious) updateGeoStatus(`시작 위치 확보 · ${detail}. 이동한 다음 위치를 기다려요.`);
-
-      if (geoPrevious) {
-        const delta = haversine(
-          geoPrevious.coords,
-          position.coords
-        );
-
-        const seconds=(position.timestamp-geoPrevious.timestamp)/1000;
-        if (seconds <= 0) {
-          updateGeoStatus(`같은 시각의 GPS 수신값 대기 · ${detail}`); return;
-        }
-        if (seconds < 30 && delta < .008) {
-          updateGeoStatus(`이동 확인 중 · 기준점에서 ${Math.round(delta*1000)}m / 8m · ${detail}`); return;
-        }
-        if (seconds >= 30) updateGeoStatus(`수신 간격이 30초 이상이라 기준점을 다시 잡아요 · ${detail}. 화면을 켜두세요.`);
-        else if (delta/seconds >= .012) updateGeoStatus(`GPS 위치가 갑자기 바뀌어 해당 구간 제외 · ${detail}`);
-        if (seconds>0 && seconds<30 && delta>=.008 && delta/seconds<.012) {
-          geoPendingKm += delta;
-          updateGeoStatus(`이동 확인 · 누적 ${Math.round((session.km+geoPendingKm)*1000)}m · ${detail} · 저장 대기`);
-          refreshHUD();
-
-          if (!geoFlushTimer) {
-            geoFlushTimer = setTimeout(async () => {
-              geoFlushTimer = null;
-
-              const current = activeSession();
-              if (!current || current.mode !== "move") return;
-
-              const pending = geoPendingKm;
-              geoPendingKm = 0;
-
-              const response = await request({
-                action: "patch",
-                id: current.id,
-                km: current.km + pending
-              }, { quiet: true });
-
-              if (!response) {
-                geoPendingKm += pending;
-                updateGeoStatus("거리 저장 실패 · 로그인과 인터넷 연결을 확인하세요. 미저장 거리는 화면에 유지됩니다.");
-              } else {
-                updateGeoStatus(`거리 저장 완료 · ${Math.round((activeSession()?.km || 0)*1000)}m · GPS 수신 ${geoSampleCount}회`);
-              }
-            }, 1500);
-          }
-        }
-      }
-
-      geoPrevious = position;
-    },
-    (error) => {
-      updateGeoStatus(
-        error.code === 1
-          ? "위치 권한이 거부되었어요. 브라우저 설정에서 허용해 주세요."
-          : error.code === 3
-            ? "GPS 수신 시간 초과 · 야외에서 정확한 위치를 켜고 다시 시작하세요."
-            : "기기에서 위치를 받지 못했어요 · 위치/GPS 설정을 확인하세요."
-      );
-    },
-    {
-      enableHighAccuracy: true,
-      maximumAge: 0,
-      timeout: 15000
+  const current=activeSession();
+  if(!current || current.mode!=="move" || current.id!==geoSessionId)return true;
+  const target=Math.max(current.km,geoTotalKm);
+  if(target<=current.km+1e-9){geoPendingKm=0;return true;}
+  const id=current.id;
+  const task=(async()=>{
+    const response=await request({action:"patch",id,km:target},{quiet:true});
+    if(!response){
+      updateGeoStatus("거리 저장 실패 · 측정값은 유지 중입니다. 인터넷 연결 후 다시 완료해 주세요.");
+      return false;
     }
-  );
+    const saved=response.sessions.find(item=>item.id===id);
+    if(!saved || saved.km+1e-9<target)return false;
+    if(geoSessionId===id) {
+      geoPendingKm=Math.max(0,geoTotalKm-saved.km);
+      refreshHUD();
+    }
+    return true;
+  })();
+  geoSavePromise=task;
+  try{return await task;}finally{if(geoSavePromise===task)geoSavePromise=null;}
+}
+
+function scheduleGPSSave() {
+  if(geoFlushTimer)return;
+  geoFlushTimer=setTimeout(async()=>{
+    geoFlushTimer=null;
+    await flushGPS();
+    if(geoWatch!==null && geoPendingKm>0)scheduleGPSSave();
+  },2000);
+}
+
+function startGPS() {
+  const session=activeSession();
+  if(!session || session.mode!=="move")return;
+  if(!navigator.geolocation){updateGeoStatus("이 환경은 위치 측정을 지원하지 않아요.");return;}
+  stopGPS();
+  if(geoSessionId!==session.id){
+    geoSessionId=session.id;geoTotalKm=session.km;geoPendingKm=0;
+  } else geoTotalKm=Math.max(geoTotalKm,session.km);
+  const generation=geoGeneration;
+  const track=createDistanceTracker();
+  geoSampleCount=0;geoLastReceived=Date.now();
+  updateGeoStatus("위치 수신 대기 중 · 위치 권한을 허용해 주세요.");
+  geoWatch=navigator.geolocation.watchPosition(position=>{
+    if(generation!==geoGeneration || activeSession()?.id!==session.id)return;
+    geoSampleCount++;geoLastReceived=Date.now();
+    const result=track(position);
+    if(result.km>0) {
+      geoTotalKm=Math.max(geoTotalKm,activeSession()?.km||0)+result.km;
+      geoPendingKm=Math.max(0,geoTotalKm-(activeSession()?.km||0));
+      scheduleGPSSave();
+    }
+    const label=result.approximate?"대략 거리":"측정 거리";
+    updateGeoStatus(result.message+" · "+label+" "+Math.round(geoTotalKm*1000)+"m"+
+      " · 수신 "+geoSampleCount+"회 · 위치 오차 약 "+Math.round(position.coords.accuracy)+"m"+
+      (geoPendingKm>0?" · 저장 대기":""));
+    refreshHUD();
+  },error=>{
+    if(generation!==geoGeneration)return;
+    updateGeoStatus(error.code===1
+      ? "위치 권한 없음 · Chrome은 사이트/앱 권한을, 설치 앱은 앱의 위치 권한을 확인해 주세요."
+      : error.code===3 ? "위치 수신 시간 초과 · 화면을 켜고 야외에서 다시 측정해 주세요."
+      : "기기에서 위치를 받지 못했어요 · 위치/GPS 설정을 확인해 주세요.");
+  },{enableHighAccuracy:true,maximumAge:0,timeout:20000});
+  if(geoPendingKm>0)scheduleGPSSave();
 }
 
 /* ---------- 폼 처리 ---------- */
@@ -1722,17 +1752,12 @@ document.addEventListener("click", async (event) => {
 
     button.disabled = true;
 
-    if (!abandoned && session.mode === "move" && geoPendingKm > 0) {
-      const pending = geoPendingKm;
-      geoPendingKm = 0;
-
-      const saved=await request({
-        action: "patch", id:session.id, km:session.km+pending
-      });
-      if(!saved) {
-        geoPendingKm+=pending;
+    if(session.mode === "move") {
+      stopGPS();
+      if(geoSavePromise)await geoSavePromise;
+      if(!abandoned && !(await flushGPS())) {
         button.disabled=false;
-        toast("거리 저장을 확인하지 못했어요. 다시 종료해 주세요.");
+        toast("거리 저장이 안 됐어요. 인터넷 연결을 확인하고 완료를 다시 눌러 주세요.");
         return;
       }
     }
