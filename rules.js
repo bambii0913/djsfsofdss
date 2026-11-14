@@ -43,11 +43,14 @@ export function calculate(session,now) {
       {label:'시작 시각 규칙성',value:seconds>=60?regular:0,formula:'계획 '+(session.plannedBedtime||'기록 없음')+' · 시작 시각 차이 '+difference+'분 · 30분마다 2점 차감'}
     ];
   } else if(session.mode==='focus') {
-    parts=[{label:'집중 시간',value:Math.min(40,Math.floor(seconds/3600)*10),formula:'완료한 1시간마다 10점 · 세션당 최대 40점'}];
+    parts=[{label:'집중 시간',value:Math.floor(seconds/3600)*10,formula:'완료한 온전한 1시간마다 10코인 · 1시간 미만 제외'}];
   } else {
-    parts=[{label:'활동 거리',value:Math.min(40,Math.floor(session.km*10)),formula:'1km마다 10점 · 소수점 버림 · 세션당 최대 40점'}];
+    parts=[{label:'활동 거리',value:Math.floor(session.km*10+1e-9),formula:'1km당 10코인 · 100m당 1코인 · 코인 소수점 버림'}];
   }
-  return {parts,points:parts.reduce((sum,p)=>sum+p.value,0)};
+  const total=parts.reduce((sum,p)=>sum+p.value,0);
+  const points=session.mode==='sleep'?total:null;
+  const coins=session.mode==='sleep'?Math.floor(total/10):total;
+  return {parts:parts.map(p=>({...p,unit:session.mode==='sleep'?'점':'코인'})),points,coins};
 }
 function finish(user,session,now,abandoned,reason='') {
   if(session.status!=='running') return;
@@ -57,8 +60,9 @@ function finish(user,session,now,abandoned,reason='') {
   session.status=abandoned?'abandoned':'completed';
   session.reason=reason;
   session.parts=abandoned?[]:result.parts;
-  session.points=abandoned?0:result.points;
-  session.coins=abandoned||session.demo?0:session.points;
+  session.points=session.mode==='sleep'?(abandoned?0:result.points):null;
+  session.coins=abandoned||session.demo?0:result.coins;
+  session.rewardVersion=3;
   session.contribution=!abandoned&&!session.demo&&session.elapsed>=60?1:0;
   user.coins+=session.coins;
 }
@@ -174,7 +178,7 @@ export function applyAction(world,id,body,now,local=false) {
       targetMinutes:target,targetKm,targetHours:user.user.hours,km:0,exercise:body.exercise,
       plannedBedtime:user.user.bedtime,
       bedtimeDifference:(localMinute-hour*60-minute+2160)%1440-720,
-      roomId:user.roomId,demo:false,hidden:[],parts:[],points:0,coins:0,contribution:0,
+      roomId:user.roomId,demo:false,hidden:[],parts:[],points:body.mode==='sleep'?0:null,coins:0,contribution:0,
       goal:body.mode==='sleep'?user.user.hours+'시간 루틴':body.mode==='focus'?target+'분 집중':body.exercise+' '+targetKm+'km'
     };
     user.sessions.unshift(session);
