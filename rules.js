@@ -135,16 +135,6 @@ export function applyAction(world,id,body,now,local=false) {
     Object.assign(user,SEATS[body.seat]);
     return;
   }
-  if(action==='sensor') {
-    if(!running || running.mode!=='sleep' || body.id!==running.id)fail('진행 중인 수면 미션을 확인해 주세요.');
-    const cm=number(body.cm,2,400);
-    const previous=running.sensor;
-    const moving=!!previous && now-previous.at<10000 && Math.abs(previous.cm-cm)>=5;
-    running.sensor={cm,at:now,moving};
-    running.sensorSamples=(running.sensorSamples||0)+1;
-    running.movementEvents=(running.movementEvents||0)+(moving?1:0);
-    return;
-  }
   if(action==='join') {
     if(running)fail('진행 중인 미션을 종료한 뒤 방을 이동해 주세요.');
     let room;
