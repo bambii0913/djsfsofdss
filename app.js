@@ -1,8 +1,6 @@
-import { localRequest } from "./local.js?v=rewards-gps-5";
-import { API_BASE } from "./config.js?v=rewards-gps-5";
-import { CHARACTERS, SEATS, calculate } from "./rules.js?v=rewards-gps-5";
-import { connectSensor, disconnectSensor } from "./sensor.js?v=rewards-gps-5";
-let sensorStatus="센서 연결 안 됨";
+import { localRequest } from "./local.js?v=split-final-7";
+import { API_BASE } from "./config.js?v=split-final-7";
+import { CHARACTERS, SEATS, calculate } from "./rules.js?v=split-final-7";
 const AUTH_TOKEN_KEY="routine-mate-auth";
 const requestHeaders=()=>({
   "Content-Type":"application/json",
@@ -345,18 +343,7 @@ function memberTime(member) {
   const increment=member.timer.running?Math.max(0,(Date.now()+clockOffset-member.timer.sampledAt)/1000):0;
   return timeString(member.timer.seconds+increment);
 }
-function updateSensorStatus() {
-  const status=$("#sensor-status");
-  if(!status)return;
-  const session=activeSession();
-  const reading=session?.sensor;
-  const fresh=reading && Date.now()+clockOffset-reading.at<10000;
-  status.textContent=fresh
-    ? "수신 중 · "+reading.cm.toFixed(1)+" cm · "+(reading.moving?"거리 변화 감지":"거리 변화 없음")
-    : sensorStatus+" · 최근 측정값 없음";
-}
 function refreshHUD() {
-  updateSensorStatus();
   const sleepScore=$("#sleep-breakdown");
   if(sleepScore && activeSession()?.mode==="sleep") {
     const estimate=calculate(activeSession(),Date.now()+clockOffset);
@@ -1106,13 +1093,7 @@ function openRunningMission() {
           <p>시간 목표 최대 50점 + 취침 시각 규칙성 최대 30점</p>
           <p>목표 취침 ${escapeHTML(session.plannedBedtime || "기록 없음")} · 시작 시각 차이 ${Math.abs(session.bedtimeDifference ?? 720)}분</p>
         </div>
-        <div class="notice">
-          <strong>아두이노 초음파센서</strong>
-          <p id="sensor-status"></p>
-          <button class="secondary" data-action="sensor-connect">USB 센서 연결</button>
-          <button class="text-button" data-action="sensor-disconnect">연결 해제</button>
-          <p class="small">데스크톱 Chrome·Edge에서 UNO와 HC-SR04를 USB로 연결하세요. 거리 변화는 수면·각성 판정과 점수에 사용하지 않아요.</p>
-        </div>
+
       ` : ""}
 
       ${session.mode === "move" ? `
@@ -1239,7 +1220,6 @@ function openResult(session) {
         </p>
 
         <p>목표: ${escapeHTML(session.goal)}</p>
-        ${session.mode==="sleep"?`<p>센서 수신 ${session.sensorSamples||0}회 · 거리 변화 ${session.movementEvents||0}회</p>`:""}
         ${session.reason ? `<p>${escapeHTML(session.reason)}</p>` : ""}
         <p>
           결과: ${timeString(session.elapsed || 0)}
@@ -1626,14 +1606,6 @@ document.addEventListener("click", async (event) => {
     await request({action:"stand"});
     return;
   }
-  if(action==="sensor-connect") {
-    connectSensor(async cm=>{
-      const session=activeSession();
-      if(session?.mode==="sleep")await request({action:"sensor",id:session.id,cm},{quiet:true});
-    },message=>{sensorStatus=message;updateSensorStatus();});
-    return;
-  }
-  if(action==="sensor-disconnect"){await disconnectSensor();return;}
   if(action==="demo-bedtime") {
     const session=activeSession();
     if(session) {
