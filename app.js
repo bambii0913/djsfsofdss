@@ -181,7 +181,22 @@ function localDateTime(value) {
 function activeSession() {
   return state.sessions.find((s) => s.status === "running");
 }
+function confirmMissionPinning(mode) {
+  // 수면·디지털 디톡스에만 적용
+  if (!["sleep", "focus"].includes(mode)) return true;
 
+  // Android에서만 안내
+  if (!/Android/i.test(navigator.userAgent)) return true;
+
+  return window.confirm(
+    "미션 시작 전에 루틴메이트 앱을 고정해 주세요.\n\n" +
+    "① 아직 고정하지 않았다면 ‘취소’를 누르세요.\n" +
+    "② 최근 앱 화면을 여세요.\n" +
+    "③ 루틴메이트 앱 아이콘 → ‘고정’을 선택하세요.\n" +
+    "④ 돌아와서 미션을 다시 시작하세요.\n\n" +
+    "이미 앱을 고정했다면 ‘확인’을 누르세요."
+  );
+}
 function elapsed(session) {
   if (!session) return 0;
   if (session.status !== "running") return session.elapsed || 0;
@@ -1510,6 +1525,7 @@ document.addEventListener("submit", async (event) => {
 
       game.exercise =
         values.get("exercise") || game.exercise;
+      if (!confirmMissionPinning(game.mode)) return;
 
       const response = await request({
         action: "start",
