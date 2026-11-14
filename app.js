@@ -1328,11 +1328,17 @@ function startGPS() {
         )}m`
       );
 
-      if (position.coords.accuracy > 25) {
-        geoPrevious = null;
-        return;
-      }
+     if (position.coords.accuracy > 25) {
+  geoPrevious = null;
 
+  updateGeoStatus(
+    `GPS 오차가 약 ${Math.round(position.coords.accuracy)}m라서 `
+    + "거리 계산을 기다리고 있어요. "
+    + "정확한 위치를 허용하고 야외에서 화면을 켜주세요."
+  );
+
+  return;
+}
       if (geoPrevious) {
         const delta = haversine(
           geoPrevious.coords,
