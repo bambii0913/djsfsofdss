@@ -133,6 +133,8 @@ let geoPrevious = null;
 let geoStatus = "측정 전";
 let geoPendingKm = 0;
 let geoFlushTimer = null;
+let geoSampleCount = 0;
+let geoLastReceived = 0;
 let viewScale = 1;
 let viewOffsetX = 0;
 let viewOffsetY = 0;
@@ -437,7 +439,7 @@ function refreshHUD() {
 
     const distance = $("#session-distance");
     if (distance && session) {
-      distance.textContent = `${session.km.toFixed(2)}km`;
+      distance.textContent = `${Math.round((session.km + geoPendingKm) * 1000)}m (${session.km.toFixed(2)}km 저장됨)`;
     }
 
     const progress = $("#session-progress");
@@ -925,7 +927,7 @@ function openRecords() {
                 <p>
                   ${timeString(elapsed(session))}
                   ${session.mode === "move"
-                    ? ` · ${session.km.toFixed(2)}km`
+                    ? ` · ${Math.round((session.km + geoPendingKm) * 1000)}m (${session.km.toFixed(2)}km 저장됨)`
                     : ""}
                 </p>
               </div>
@@ -1112,7 +1114,7 @@ function openRunningMission() {
       ${session.mode === "move" ? `
         <div class="row spread" style="margin-top:20px">
           <strong id="session-distance">
-            ${session.km.toFixed(2)}km
+            ${Math.round((session.km + geoPendingKm) * 1000)}m (${session.km.toFixed(2)}km 저장됨)
           </strong>
           <span class="small">
             목표 ${session.targetKm}km
@@ -1221,7 +1223,7 @@ function openResult(session) {
         <p>
           결과: ${timeString(session.elapsed || 0)}
           ${session.mode === "move"
-            ? ` · ${session.km.toFixed(2)}km`
+            ? ` · ${Math.round((session.km + geoPendingKm) * 1000)}m (${session.km.toFixed(2)}km 저장됨)`
             : ""}
         </p>
       </div>
@@ -1318,27 +1320,23 @@ function startGPS() {
   }
 
   stopGPS();
-  updateGeoStatus("위치 수신 대기 중…");
+  geoSampleCount = 0;
+  geoLastReceived = Date.now();
+  updateGeoStatus("위치 수신 대기 중… 위치 권한을 허용해 주세요.");
 
   geoWatch = navigator.geolocation.watchPosition(
     (position) => {
-      updateGeoStatus(
-        `위치 측정 중 · 정확도 약 ${Math.round(
-          position.coords.accuracy
-        )}m`
-      );
+      geoSampleCount++;
+      geoLastReceived = Date.now();
+      const accuracy = position.coords.accuracy;
+      const detail = `수신 ${geoSampleCount}회 · GPS 오차 약 ${Math.round(accuracy)}m`;
+      if (!Number.isFinite(accuracy) || accuracy > 25) {
+        geoPrevious = null;
+        updateGeoStatus(`거리 계산 보류 · ${detail}. 정확한 위치를 켜고 야외에서 기다려 주세요. 오차 25m 이하가 필요해요.`);
+        return;
+      }
+      if (!geoPrevious) updateGeoStatus(`시작 위치 확보 · ${detail}. 이동한 다음 위치를 기다려요.`);
 
-     if (position.coords.accuracy > 25) {
-  geoPrevious = null;
-
-  updateGeoStatus(
-    `GPS 오차가 약 ${Math.round(position.coords.accuracy)}m라서 `
-    + "거리 계산을 기다리고 있어요. "
-    + "정확한 위치를 허용하고 야외에서 화면을 켜주세요."
-  );
-
-  return;
-}
       if (geoPrevious) {
         const delta = haversine(
           geoPrevious.coords,
@@ -1346,9 +1344,18 @@ function startGPS() {
         );
 
         const seconds=(position.timestamp-geoPrevious.timestamp)/1000;
-        if(seconds>0 && seconds<30 && delta<.008)return;
+        if (seconds <= 0) {
+          updateGeoStatus(`같은 시각의 GPS 수신값 대기 · ${detail}`); return;
+        }
+        if (seconds < 30 && delta < .008) {
+          updateGeoStatus(`이동 확인 중 · 기준점에서 ${Math.round(delta*1000)}m / 8m · ${detail}`); return;
+        }
+        if (seconds >= 30) updateGeoStatus(`수신 간격이 30초 이상이라 기준점을 다시 잡아요 · ${detail}. 화면을 켜두세요.`);
+        else if (delta/seconds >= .012) updateGeoStatus(`GPS 위치가 갑자기 바뀌어 해당 구간 제외 · ${detail}`);
         if (seconds>0 && seconds<30 && delta>=.008 && delta/seconds<.012) {
           geoPendingKm += delta;
+          updateGeoStatus(`이동 확인 · 누적 ${Math.round((session.km+geoPendingKm)*1000)}m · ${detail} · 저장 대기`);
+          refreshHUD();
 
           if (!geoFlushTimer) {
             geoFlushTimer = setTimeout(async () => {
@@ -1368,6 +1375,9 @@ function startGPS() {
 
               if (!response) {
                 geoPendingKm += pending;
+                updateGeoStatus("거리 저장 실패 · 로그인과 인터넷 연결을 확인하세요. 미저장 거리는 화면에 유지됩니다.");
+              } else {
+                updateGeoStatus(`거리 저장 완료 · ${Math.round((activeSession()?.km || 0)*1000)}m · GPS 수신 ${geoSampleCount}회`);
               }
             }, 1500);
           }
@@ -1380,7 +1390,9 @@ function startGPS() {
       updateGeoStatus(
         error.code === 1
           ? "위치 권한이 거부되었어요. 브라우저 설정에서 허용해 주세요."
-          : "위치 수신에 실패했어요. 다시 시도해 주세요."
+          : error.code === 3
+            ? "GPS 수신 시간 초과 · 야외에서 정확한 위치를 켜고 다시 시작하세요."
+            : "기기에서 위치를 받지 못했어요 · 위치/GPS 설정을 확인하세요."
       );
     },
     {
@@ -1501,6 +1513,7 @@ document.addEventListener("submit", async (event) => {
 
       if (response) {
         openRunningMission();
+        if (activeSession()?.mode === "move") startGPS();
       }
     }
 
@@ -2568,3 +2581,9 @@ if(LOCAL_MODE) {
   banner.textContent="기기 내 체험 · 로그인·친구 동기화 없이 이 브라우저에 저장돼요 · 체험 코인 100개";
   document.body.prepend(banner);
 }
+
+setInterval(() => {
+  if (geoWatch !== null && geoLastReceived && Date.now()-geoLastReceived > 20000) {
+    updateGeoStatus("20초 이상 새 GPS 값이 없어요. 화면을 켜고 위치 권한·GPS를 확인한 뒤 위치 측정 시작을 다시 누르세요.");
+  }
+}, 5000);
