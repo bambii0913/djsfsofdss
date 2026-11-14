@@ -1,4 +1,4 @@
-import {createWorld,applyAction,clientState} from './rules.js?v=rewards-gps-5';
+import {createWorld,applyAction,clientState} from './rules.js?v=split-final-7';
 const key='routine-mate-demo-v2';
 // Explicit personal demo. No password collection and no simulated other people.
 export async function localRequest(body) {
