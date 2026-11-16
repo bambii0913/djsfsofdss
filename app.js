@@ -197,16 +197,29 @@ function confirmMissionPinning(mode) {
     "이미 앱을 고정했다면 ‘확인’을 누르세요."
   );
 }
+
 function elapsed(session) {
   if (!session) return 0;
-  if (session.status !== "running") return session.elapsed || 0;
 
-  return Math.max(
-    0,
-    Math.floor((Date.now() + clockOffset - session.startedAt) / 1000)
-      + session.offset
+  if (session.status !== "running") {
+    return session.elapsed || 0;
+  }
+
+  if (session.mode === "sleep" && session.paused) {
+    return session.offset || 0;
+  }
+
+  return Math.min(
+    86400,
+    Math.max(
+      0,
+      Math.floor(
+        (Date.now() + clockOffset - session.startedAt) / 1000
+      ) + (session.offset || 0)
+    )
   );
 }
+
 
 function toast(message) {
   clearTimeout(toastTimer);
@@ -305,9 +318,18 @@ function request(body, options = {}) {
   return task;
 }
 
+
 function sync() {
-  if(!LOCAL_MODE && !state.authenticated)return;
-  if(document.hidden && activeSession()?.mode==="focus")return;
+  if (!LOCAL_MODE && !state.authenticated) return;
+
+  if (document.hidden) {
+    const session = activeSession();
+
+    if (session?.mode === "focus" || session?.mode === "sleep") {
+      return;
+    }
+  }
+
   return request({
     action: "sync",
     x: game.player.x,
@@ -315,6 +337,7 @@ function sync() {
     world: game.world
   }, { quiet: true });
 }
+
 
 function openAuth(register=false) {
   openDialog("auth",register?"루틴메이트 회원가입":"다시 만나 반가워요",`
@@ -354,9 +377,16 @@ async function authenticate(values) {
   await request({action:"sync",world:game.world,x:game.player.x,y:game.player.y});
 }
 function memberTime(member) {
-  if(!member.timer)return "";
-  const increment=member.timer.running?Math.max(0,(Date.now()+clockOffset-member.timer.sampledAt)/1000):0;
-  return timeString(member.timer.seconds+increment);
+  if (!member.timer) return "";
+
+  const increment = member.timer.running
+    ? Math.max(
+        0,
+        (Date.now() + clockOffset - member.timer.sampledAt) / 1000
+      )
+    : 0;
+
+  return timeString(member.timer.seconds + increment);
 }
 function refreshHUD() {
   const sleepScore=$("#sleep-breakdown");
@@ -1787,11 +1817,80 @@ function leaveFocus() {
     if(response)localStorage.removeItem(EXIT_KEY);
   });
 }
-document.addEventListener("visibilitychange",()=>{
-  if(document.hidden)leaveFocus();
-  else sync();
+
+let sleepPausePending = false;
+
+function pauseSleepOnExit() {
+  const session = activeSession();
+
+  if (!session || session.mode !== "sleep") return;
+  if (session.paused || sleepPausePending) return;
+
+  sleepPausePending = true;
+
+  // 화면이 숨겨진 즉시 타이머 표시 정지
+  const now = Date.now() + clockOffset;
+  const seconds = elapsed(session);
+
+  session.offset = seconds;
+  session.paused = true;
+  session.pausedAt = now;
+
+  refreshHUD();
+
+  request({
+    action: "sleep-pause",
+    id: session.id
+  }, { quiet: true }).then(() => {
+    sleepPausePending = false;
+  });
+}
+
+async function resumeSleepOnReturn() {
+  const session = activeSession();
+
+  if (!session || session.mode !== "sleep") {
+    sync();
+    return;
+  }
+
+  // 서버에 먼저 재개 요청
+  const response = await request({
+    action: "sleep-resume",
+    id: session.id
+  }, { quiet: true });
+
+  if (response) {
+    refreshHUD();
+  }
+
+  sync();
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    const session = activeSession();
+
+    if (session?.mode === "focus") {
+      leaveFocus();
+    } else if (session?.mode === "sleep") {
+      pauseSleepOnExit();
+    }
+  } else {
+    resumeSleepOnReturn();
+  }
 });
-window.addEventListener("pagehide",leaveFocus);
+
+window.addEventListener("pagehide", () => {
+  const session = activeSession();
+
+  if (session?.mode === "focus") {
+    leaveFocus();
+  } else if (session?.mode === "sleep") {
+    pauseSleepOnExit();
+  }
+});
+
 
 /* ---------- 아이소메트릭 게임 렌더링 ---------- */
 
