@@ -1,3 +1,4 @@
+
 export const PRICES = {
   bed: 30,
   desk: 40,
@@ -82,13 +83,25 @@ function text(value, max) {
 }
 
 export function elapsed(session, now) {
-  return session.status === "running"
-    ? Math.min(
-        86400,
-        Math.max(0, Math.floor((now - session.startedAt) / 1000)) +
-          session.offset
-      )
-    : session.elapsed;
+  if (session.status !== "running") return session.elapsed || 0;
+  if (session.mode === "sleep" && session.paused) return session.offset || 0;
+  return Math.min(86400, Math.max(0,
+    Math.floor((now - session.startedAt) / 1000) + (session.offset || 0)
+  ));
+}
+
+function pauseSleep(session, at) {
+  if (session?.mode !== "sleep" || session.status !== "running" || session.paused) return;
+  session.offset = elapsed(session, at);
+  session.paused = true;
+  session.pausedAt = at;
+}
+
+function resumeSleep(session, at) {
+  if (session?.mode !== "sleep" || session.status !== "running" || !session.paused) return;
+  session.startedAt = at;
+  session.paused = false;
+  session.pausedAt = null;
 }
 
 // 수면 점수 → 코인: 10점당 1코인, 나머지는 버림
@@ -255,9 +268,23 @@ export function applyAction(world, id, body, now, local = false) {
     running = undefined;
   }
 
+  // 브라우저가 종료되거나 숨김 이벤트를 전달하지 못한 경우에도
+  // 마지막 정상 접속 이후의 장시간 공백을 수면 시간에 포함하지 않습니다.
+  if (running?.mode === "sleep" && !running.paused && now - user.seen > 6000) {
+    pauseSleep(running, user.seen + 3000);
+  }
+
   user.seen = now;
 
   const action = body.action;
+
+  if (action === "sleep-pause" || action === "sleep-resume") {
+    const session = user.sessions.find(s => s.id === body.id);
+    if (!session || session.status !== "running" || session.mode !== "sleep") return;
+    if (action === "sleep-pause") pauseSleep(session, now);
+    else resumeSleep(session, now);
+    return;
+  }
 
   if (action === "sync") {
     if (body.x !== undefined) {
@@ -470,6 +497,8 @@ export function applyAction(world, id, body, now, local = false) {
       status: "running",
       offset: 0,
       elapsed: 0,
+      paused: false,
+      pausedAt: null,
       targetMinutes: target,
       targetKm,
       targetHours: user.user.hours,
@@ -555,6 +584,8 @@ export function applyAction(world, id, body, now, local = false) {
           true,
           "집중 화면을 떠나 미션이 초기화됐어요."
         );
+      } else if (session.mode === "sleep") {
+        pauseSleep(session, now);
       } else {
         session.hidden = [{ at: now }];
       }
